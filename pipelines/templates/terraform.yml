@@ -1,0 +1,37 @@
+# Runs a script against the main Terraform layer with remote state.
+# Authentication: workload identity federation through the Azure DevOps service
+# connection. The provider requests fresh OIDC tokens itself, so long applies
+# don't fail when a short-lived token expires. No client secret exists anywhere.
+parameters:
+  - name: displayName
+    type: string
+  - name: script
+    type: string
+
+steps:
+  - script: |
+      set -euo pipefail
+      terraform -chdir=infra init -input=false \
+        -backend-config="resource_group_name=$(tfStateRg)" \
+        -backend-config="storage_account_name=$(tfStateAccount)" \
+        -backend-config="container_name=$(tfStateContainer)"
+      ${{ parameters.script }}
+    displayName: ${{ parameters.displayName }}
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_OIDC_REQUEST_TOKEN: $(System.AccessToken)
+      ARM_OIDC_REQUEST_URL: $(System.OidcRequestUri)
+      ARM_ADO_PIPELINE_SERVICE_CONNECTION_ID: $(serviceConnectionId)
+      ARM_OIDC_AZURE_SERVICE_CONNECTION_ID: $(serviceConnectionId)
+      ARM_CLIENT_ID: $(armClientId)
+      ARM_TENANT_ID: $(armTenantId)
+      ARM_SUBSCRIPTION_ID: $(armSubscriptionId)
+      TF_IN_AUTOMATION: "true"
+      TF_VAR_resource_group_name: $(appResourceGroup)
+      TF_VAR_key_vault_name: $(keyVaultName)
+      TF_VAR_acr_name: $(acrName)
+      TF_VAR_group_staff_id: $(groupStaffId)
+      TF_VAR_group_hr_id: $(groupHrId)
+      TF_VAR_web_client_id: $(webClientId)
+      TF_VAR_demo_user_object_id: $(demoUserObjectId)
+      TF_VAR_container_image: $(acrName).azurecr.io/policy-assistant:latest

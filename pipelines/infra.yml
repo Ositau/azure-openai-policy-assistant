@@ -1,0 +1,121 @@
+# Infrastructure pipeline: Validate -> Plan -> (manual approval) -> Apply.
+#
+# The plan is shown in the Plan stage log for review. A plan file can't be shared
+# as an artifact in a public project (it would expose keys held in state), so the
+# Apply stage re-plans and refuses to continue unless the list of resource changes
+# is identical to the one that was approved.
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include: [infra/*, pipelines/infra.yml, pipelines/templates/*]
+    exclude: [infra/bootstrap/*]
+
+pr: none # public project: never run with the service connection for fork PRs
+
+variables:
+  - group: policy-assistant
+  - name: tfVersion
+    value: 1.14.7
+  - name: tflintVersion
+    value: 0.58.1
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Validate
+    jobs:
+      - job: validate
+        displayName: Format, validate, lint
+        steps:
+          - template: templates/install-tools.yml
+            parameters:
+              tflint: true
+          - script: |
+              set -euo pipefail
+              terraform fmt -check -recursive infra
+              for dir in infra infra/bootstrap; do
+                terraform -chdir=$dir init -backend=false -input=false
+                terraform -chdir=$dir validate
+                tflint --chdir=$dir --init
+                tflint --chdir=$dir
+              done
+            displayName: terraform fmt / validate / tflint
+
+  - stage: Plan
+    dependsOn: Validate
+    jobs:
+      - job: plan
+        displayName: Terraform plan
+        steps:
+          - template: templates/install-tools.yml
+
+          # The Container App needs an image on first creation. Build one if the
+          # registry is still empty; afterwards the app pipeline owns releases.
+          - task: AzureCLI@2
+            displayName: Ensure an initial image exists
+            inputs:
+              azureSubscription: $(serviceConnectionName)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                if az acr repository show --name "$(acrName)" --image policy-assistant:latest >/dev/null 2>&1; then
+                  echo "policy-assistant:latest already present"
+                else
+                  az acr build --registry "$(acrName)" --image "policy-assistant:latest" --image "policy-assistant:$(Build.BuildId)" app
+                fi
+
+          - template: templates/terraform.yml
+            parameters:
+              displayName: terraform plan
+              script: |
+                set +e
+                terraform -chdir=infra plan -input=false -detailed-exitcode -out=tfplan
+                code=$?
+                set -e
+                if [ $code -eq 1 ]; then exit 1; fi
+                echo "##vso[task.setvariable variable=hasChanges]$([ $code -eq 2 ] && echo true || echo false)"
+                terraform -chdir=infra show -json tfplan \
+                  | jq -c '[.resource_changes[] | select(.change.actions != ["no-op"]) | {address, actions: .change.actions}] | sort_by(.address)' \
+                  > "$(Build.ArtifactStagingDirectory)/plan-summary.json"
+                echo "Changes to approve:"; jq -r '.[] | "\(.actions | join("/"))  \(.address)"' "$(Build.ArtifactStagingDirectory)/plan-summary.json"
+          - script: echo "##vso[task.setvariable variable=hasChanges;isOutput=true]$(hasChanges)"
+            name: result
+            displayName: Publish plan result
+
+          - publish: $(Build.ArtifactStagingDirectory)/plan-summary.json
+            artifact: plan-summary
+            displayName: Publish plan summary (no values)
+
+  - stage: Apply
+    dependsOn: Plan
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(dependencies.Plan.outputs['plan.result.hasChanges'], 'true'))
+    jobs:
+      - deployment: apply
+        displayName: Terraform apply
+        environment: policy-assistant-demo # approval check configured on this environment
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - download: current
+                  artifact: plan-summary
+                - template: templates/install-tools.yml
+                - template: templates/terraform.yml
+                  parameters:
+                    displayName: Re-plan, compare with approved plan, apply
+                    script: |
+                      terraform -chdir=infra plan -input=false -out=tfplan
+                      terraform -chdir=infra show -json tfplan \
+                        | jq -c '[.resource_changes[] | select(.change.actions != ["no-op"]) | {address, actions: .change.actions}] | sort_by(.address)' \
+                        > /tmp/now.json
+                      if ! diff <(jq . "$(Pipeline.Workspace)/plan-summary/plan-summary.json") <(jq . /tmp/now.json); then
+                        echo "##vso[task.logissue type=error]Planned changes differ from the approved plan. Re-run the pipeline."
+                        exit 1
+                      fi
+                      terraform -chdir=infra apply -input=false tfplan
+                      echo "App URL: $(terraform -chdir=infra output -raw app_url)"

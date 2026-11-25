@@ -1,0 +1,110 @@
+# Application pipeline: Test -> Build image -> Evaluate (quality gate) -> Release.
+# A release only reaches users if every evaluation question passes and no HR-only
+# document is retrieved for a Staff user.
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include: [app/*, docs/*, scripts/*, eval/*, tests/*, pipelines/app.yml]
+
+pr: none
+
+variables:
+  - group: policy-assistant
+  - name: tfVersion
+    value: 1.14.7
+  - name: image
+    value: $(acrName).azurecr.io/policy-assistant:$(Build.BuildId)
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: Test
+    jobs:
+      - job: test
+        displayName: Unit tests
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.12"
+          - script: |
+              pip install -q -r app/requirements.txt pytest httpx
+              pytest -q tests --junitxml=test-results.xml
+            displayName: pytest
+          - task: PublishTestResults@2
+            condition: always()
+            inputs:
+              testResultsFiles: test-results.xml
+
+  - stage: Build
+    dependsOn: Test
+    jobs:
+      - job: build
+        displayName: Build image in ACR
+        steps:
+          - task: AzureCLI@2
+            displayName: az acr build
+            inputs:
+              azureSubscription: $(serviceConnectionName)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                az acr build --registry "$(acrName)" \
+                  --image "policy-assistant:$(Build.BuildId)" --image "policy-assistant:latest" app
+
+  - stage: Evaluate
+    dependsOn: Build
+    jobs:
+      - job: evaluate
+        displayName: Re-index and run evaluation set
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: "3.12"
+          - template: templates/install-tools.yml
+          - template: templates/terraform.yml
+            parameters:
+              displayName: Read deployment settings
+              script: |
+                terraform -chdir=infra output -json local_env \
+                  | jq -r 'to_entries[] | "##vso[task.setvariable variable=\(.key)]\(.value)"'
+          - script: pip install -q -r app/requirements.txt
+            displayName: Install dependencies
+          - task: AzureCLI@2
+            displayName: Ingest policies and evaluate
+            inputs:
+              azureSubscription: $(serviceConnectionName)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                python scripts/ingest.py
+                python scripts/evaluate.py
+          - publish: eval/results.md
+            artifact: evaluation
+            condition: always()
+
+  - stage: Release
+    dependsOn: Evaluate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: release
+        displayName: Roll out new image
+        environment: policy-assistant-demo-app
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureCLI@2
+                  displayName: az containerapp update
+                  inputs:
+                    azureSubscription: $(serviceConnectionName)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      az containerapp update -g "$(appResourceGroup)" -n ca-policy-assistant --image "$(image)"
+                      fqdn=$(az containerapp show -g "$(appResourceGroup)" -n ca-policy-assistant --query properties.configuration.ingress.fqdn -o tsv)
+                      echo "Released $(image) to https://$fqdn"

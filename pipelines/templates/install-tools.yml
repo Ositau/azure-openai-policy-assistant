@@ -1,0 +1,21 @@
+# Installs pinned Terraform (and optionally TFLint) on a Microsoft-hosted Ubuntu agent.
+parameters:
+  - name: tflint
+    type: boolean
+    default: false
+
+steps:
+  - script: |
+      set -euo pipefail
+      curl -sSfL -o /tmp/tf.zip "https://releases.hashicorp.com/terraform/$(tfVersion)/terraform_$(tfVersion)_linux_amd64.zip"
+      sudo unzip -o -q /tmp/tf.zip -d /usr/local/bin
+      terraform version
+    displayName: Install Terraform $(tfVersion)
+
+  - ${{ if parameters.tflint }}:
+      - script: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/tflint.zip "https://github.com/terraform-linters/tflint/releases/download/v$(tflintVersion)/tflint_linux_amd64.zip"
+          sudo unzip -o -q /tmp/tflint.zip -d /usr/local/bin
+          tflint --version
+        displayName: Install TFLint $(tflintVersion)
