@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.9"
 
   # Remote state created by infra/bootstrap. Values passed with -backend-config
-  # (see pipelines/templates/terraform-init.yml). Entra ID auth only, no storage keys.
+  # (see pipelines/templates/terraform.yml). Entra ID auth only, no storage keys.
   backend "azurerm" {
     use_azuread_auth = true
     key              = "policy-assistant.tfstate"

@@ -40,7 +40,7 @@ The company ("Kestrel Bridge Finance") and its policies are fictional, written f
 
 **Pipeline identity, least privilege:** no client secret (workload identity federation), no Microsoft Graph permissions (Entra ID objects are in the bootstrap layer), Contributor on one resource group only, and Role Based Access Control Administrator restricted by an ABAC condition to six named roles.
 
-Setup steps: [SETUP.md](SETUP.md).
+Setup steps: [SETUP.md](SETUP.md). A step-by-step guide with screenshots, for reproducing the whole project from an empty subscription: [Build it yourself](https://ositauche.com/build-secure-azure-openai-rag-app-terraform-azure-devops-guide/).
 
 ## How answers are produced
 

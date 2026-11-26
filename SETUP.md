@@ -14,6 +14,22 @@ Two Terraform layers, two pipelines.
 
 The pipeline identity has **no Microsoft Graph permissions and no secret**. It is Contributor on one resource group, and may only create role assignments for six named roles there (an ABAC condition on Role Based Access Control Administrator).
 
+A full walkthrough with screenshots: [Build it yourself: a secure Azure OpenAI policy assistant with Terraform and Azure DevOps](https://ositauche.com/build-secure-azure-openai-rag-app-terraform-azure-devops-guide/).
+
+## Before you start
+
+- Owner on the subscription, plus permission to create Entra ID app registrations and security groups.
+- Azure OpenAI quota in Sweden Central for `gpt-4o-mini` and `text-embedding-3-small` (DataZoneStandard, 30K TPM each by default).
+- No other free-tier AI Search service in the subscription.
+- A new Azure DevOps organisation may need the free Microsoft-hosted parallelism grant (https://aka.ms/azpipelines-parallelism-request) before any pipeline runs.
+- Fork this repo: the pipelines run from your fork.
+- Register the resource providers once (the pipeline identity can't, it only has rights in one resource group):
+  ```bash
+  for p in Microsoft.App Microsoft.CognitiveServices Microsoft.Search Microsoft.OperationalInsights \n           Microsoft.Insights Microsoft.ContainerRegistry Microsoft.KeyVault Microsoft.Storage Microsoft.ManagedIdentity; do
+    az provider register --namespace $p
+  done
+  ```
+
 ## One-time setup
 
 1. **Azure DevOps project** (private; the code itself is public on GitHub): pipelines read the GitHub repo through a GitHub connection, created when you add the first pipeline. Keep "Build pull requests from forks" off.
@@ -36,10 +52,11 @@ The pipeline identity has **no Microsoft Graph permissions and no secret**. It i
 
 8. **First infra run**: run the infra pipeline, review the plan in the Plan stage log, approve.
 
-9. **Sign-in redirect** (once): the sign-in app needs the Container Apps domain, which only exists after step 8.
-   ```bash
-   terraform -chdir=infra/bootstrap apply -var "redirect_domain=<sign-in redirect domain from the infra pipeline log>"
+9. **Sign-in redirect** (once): the sign-in app needs the Container Apps domain, which only exists after step 8. Add it to `infra/bootstrap/terraform.tfvars` so later applies keep it:
+   ```hcl
+   redirect_domain = "<sign-in redirect domain from the Apply stage log>"
    ```
+   then run `terraform -chdir=infra/bootstrap apply` again.
 
 10. **First app run**: run the app pipeline. It indexes the policies, runs the evaluation set (fails the release on any wrong answer or HR leak) and rolls out the image. Open the app URL from the Release stage log.
 
@@ -50,14 +67,21 @@ terraform -chdir=infra/bootstrap apply ... -var 'demo_user_groups=["staff","hr"]
 ```
 Sign out and back in to the app to pick up the new group.
 
+## Rotating the sign-in secret (every 90 days)
+
+```bash
+terraform -chdir=infra/bootstrap apply -replace=azuread_application_password.web
+az containerapp revision restart -g rg-policy-assistant-demo -n ca-policy-assistant \n  --revision $(az containerapp show -g rg-policy-assistant-demo -n ca-policy-assistant --query properties.latestRevisionName -o tsv)
+```
+
 ## Teardown
 
-Destroy the main layer first (it lives in the bootstrap resource group), then the bootstrap:
+Delete the app resource group first (the main layer's resources live in it), then destroy the bootstrap:
 ```bash
 az group delete -n rg-policy-assistant-demo --yes        # removes app resources, Key Vault, registry
 terraform -chdir=infra/bootstrap destroy
 ```
-Delete the service connection, variable group and environments in Azure DevOps afterwards.
+Deleted Azure OpenAI accounts are kept for 48 hours; purge with `az cognitiveservices account purge -g rg-policy-assistant-demo -l swedencentral -n <name>` if you want the quota back straight away. Delete the pipelines, service connection, variable group and environments in Azure DevOps afterwards.
 
 ## Things to check on the first run
 
