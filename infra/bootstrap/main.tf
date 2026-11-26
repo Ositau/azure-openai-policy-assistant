@@ -203,7 +203,7 @@ data "azurerm_role_definition" "assignable" {
 }
 
 locals {
-  assignable_ids = join(", ", [for r in data.azurerm_role_definition.assignable : r.role_definition_id])
+  assignable_ids = join(", ", [for r in data.azurerm_role_definition.assignable : basename(r.role_definition_id)])
   rbac_condition = <<-EOT
     (
      (
