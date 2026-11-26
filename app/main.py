@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import rag
+import selftest
 
 if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
     from azure.monitor.opentelemetry import configure_azure_monitor
@@ -27,6 +28,10 @@ if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING"):
 
 audit = logging.getLogger("policy_assistant.audit")
 audit.setLevel(logging.INFO)
+health = logging.getLogger("policy_assistant.selftest")
+health.setLevel(logging.INFO)
+SELFTEST_MIN_INTERVAL = 2.0  # seconds between self-tests, so the open endpoint can't run up a bill
+_last_selftest = {"at": 0.0}
 
 app = FastAPI(title="Policy Assistant", docs_url=None, redoc_url=None)
 STATIC = Path(__file__).parent / "static"
@@ -63,6 +68,29 @@ def index() -> FileResponse:
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/api/selftest")
+def run_selftest() -> dict:
+    """Fixed check against the real services, open without sign-in (see selftest.py).
+
+    Excluded from Entra ID sign-in in the Container Apps auth settings, like a health check.
+    Returns no policy content and is rate-limited.
+    """
+    now = time.monotonic()
+    if now - _last_selftest["at"] < SELFTEST_MIN_INTERVAL:
+        raise HTTPException(status_code=429, detail="Too many self-tests; try again in a moment.")
+    _last_selftest["at"] = now
+
+    fault = selftest.mode()
+    try:
+        result = selftest.run(fault)
+    except Exception:
+        # Logged with the full Azure error, so monitoring (and the incident assistant) can see the real cause.
+        health.exception("selftest_failed", extra={"fault_mode": fault})
+        raise HTTPException(status_code=500, detail="Self-test failed.") from None
+    health.info("selftest_ok", extra={"fault_mode": fault, "latency_ms": result["ms"]})
+    return result
 
 
 @app.get("/api/me")

@@ -128,7 +128,9 @@ locals {
 
   # Whoever runs ingest/eval: the pipeline identity, plus optionally one person for local runs.
   data_operators = merge(
-    { pipeline = data.azurerm_client_config.current.object_id },
+    # Name the pipeline identity explicitly when someone else runs the plan (e.g. the PR review job),
+    # otherwise these permissions would appear to move to whoever runs Terraform.
+    { pipeline = coalesce(var.pipeline_object_id, data.azurerm_client_config.current.object_id) },
     var.demo_user_object_id == "" ? {} : { demo_user = var.demo_user_object_id },
   )
   operator_roles = {
@@ -257,6 +259,11 @@ resource "azurerm_container_app" "this" {
         name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         secret_name = "appinsights-connection-string"
       }
+      # Fault switch for the self-test only: off, errors, slow or ai. Real users are never affected.
+      env {
+        name  = "FAULT_MODE"
+        value = "off"
+      }
     }
   }
 
@@ -280,6 +287,8 @@ resource "azapi_resource" "auth" {
       globalValidation = {
         unauthenticatedClientAction = "RedirectToLoginPage"
         redirectToProvider          = "azureactivedirectory"
+        # Fixed self-test used by monitoring (see app/selftest.py): no policy content, rate-limited.
+        excludedPaths = ["/api/selftest"]
       }
       identityProviders = {
         azureActiveDirectory = {
