@@ -1,0 +1,58 @@
+# On every pull request that touches the infrastructure, plan the change and have it reviewed
+# by https://github.com/Ositau/ai-terraform-reviewer (safety checks + Azure OpenAI).
+#
+# This only plans; Azure DevOps still applies changes after merge, with its own approval.
+# The identity here is read-only: Reader on the app resource group, Storage Blob Data Reader on
+# the state, and Cognitive Services OpenAI User for the review. So the plan runs with
+# -refresh=false (no calls that need write or key access) and -lock=false (no write to the state).
+name: pr-plan-review
+
+on:
+  pull_request:
+    paths: ["infra/**", ".github/workflows/pr-plan-review.yml"]
+
+permissions:
+  contents: read
+  id-token: write        # OIDC sign-in to Azure, no secrets
+  pull-requests: write   # post the review comment
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.7
+          terraform_wrapper: false
+
+      - name: Terraform plan (read-only)
+        env:
+          TF_STATE: ${{ vars.TF_STATE }}
+          TF_VARS_JSON: ${{ vars.TF_VARS_JSON }}
+        run: |
+          set -euo pipefail
+          echo "$TF_VARS_JSON" > infra/review.auto.tfvars.json
+          terraform -chdir=infra init -input=false \
+            -backend-config="resource_group_name=$(jq -r .resource_group_name <<< "$TF_STATE")" \
+            -backend-config="storage_account_name=$(jq -r .storage_account_name <<< "$TF_STATE")" \
+            -backend-config="container_name=$(jq -r .container_name <<< "$TF_STATE")"
+          terraform -chdir=infra plan -input=false -refresh=false -lock=false -out=tfplan
+          terraform -chdir=infra show -json tfplan > plan.json
+
+      - uses: Ositau/ai-terraform-reviewer@main
+        with:
+          plan-json: plan.json
+          azure-openai-endpoint: ${{ vars.AZURE_OPENAI_ENDPOINT }}
