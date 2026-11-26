@@ -66,7 +66,7 @@ resource "azurerm_cognitive_account" "openai" {
   kind                  = "OpenAI"
   sku_name              = "S0"
   custom_subdomain_name = "oai-policy-assistant-${local.suffix}"
-  local_auth_enabled    = false # Entra ID only, API keys disabled
+  local_auth_enabled    = true # temporarily, to test with an API key
   tags                  = var.tags
 }
 
@@ -111,7 +111,7 @@ resource "azurerm_search_service" "this" {
   name                         = "srch-policy-assistant-${local.suffix}"
   location                     = data.azurerm_resource_group.this.location
   resource_group_name          = data.azurerm_resource_group.this.name
-  sku                          = "free"
+  sku                          = "basic"
   local_authentication_enabled = false
   tags                         = var.tags
 }
