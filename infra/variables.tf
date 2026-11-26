@@ -28,6 +28,12 @@ variable "web_client_id" {
   type        = string
 }
 
+variable "pipeline_object_id" {
+  description = "Object ID of the Azure DevOps pipeline identity. Leave empty when the pipeline itself runs Terraform; set it when another identity plans (the pull request review)."
+  type        = string
+  default     = ""
+}
+
 variable "demo_user_object_id" {
   description = "Optional: a person who runs ingest/eval locally. Gets the same data-plane roles as the pipeline."
   type        = string

@@ -28,6 +28,8 @@ jobs:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      # The Azure DevOps pipeline identity, so role assignments made for it don't appear to move to this job.
+      TF_VAR_pipeline_object_id: ${{ vars.PIPELINE_OBJECT_ID }}
     steps:
       - uses: actions/checkout@v4
 

@@ -128,7 +128,9 @@ locals {
 
   # Whoever runs ingest/eval: the pipeline identity, plus optionally one person for local runs.
   data_operators = merge(
-    { pipeline = data.azurerm_client_config.current.object_id },
+    # Name the pipeline identity explicitly when someone else runs the plan (e.g. the PR review job),
+    # otherwise these permissions would appear to move to whoever runs Terraform.
+    { pipeline = coalesce(var.pipeline_object_id, data.azurerm_client_config.current.object_id) },
     var.demo_user_object_id == "" ? {} : { demo_user = var.demo_user_object_id },
   )
   operator_roles = {
