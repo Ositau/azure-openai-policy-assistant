@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 
 import tf_env
 
@@ -23,7 +24,7 @@ import rag  # noqa: E402
 HR_ONLY = {"pay-and-grading", "disciplinary-investigations"}
 
 
-def main() -> None:
+def main() -> int:
     questions = json.loads((tf_env.ROOT / "eval" / "questions.json").read_text(encoding="utf-8"))
     ids = {"staff": os.environ["GROUP_STAFF_ID"], "hr": os.environ["GROUP_HR_ID"]}
 
@@ -69,6 +70,9 @@ def main() -> None:
         lines.append(f"| {item['id']} | {','.join(item['as'])} | {item['q']} | {item['expect']} | {status} | {answer} | {sources} |")
     (tf_env.ROOT / "eval" / "results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
+    # Quality gate: a non-zero exit fails the pipeline step, so the Release stage never runs.
+    return 0 if passed == len(rows) and leaks == 0 else 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
