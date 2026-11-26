@@ -61,5 +61,5 @@ Delete the service connection, variable group and environments in Azure DevOps a
 
 ## Things to check on the first run
 
-- Terraform authenticates with the service connection through OIDC (`ARM_USE_OIDC`, `System.OidcRequestUri`). If your organisation restricts OIDC token requests to tasks, switch the Terraform steps to `AzureCLI@2` with `ARM_USE_CLI=true`.
+- Terraform authenticates with the service connection through OIDC (`ARM_USE_OIDC`, `System.OidcRequestUri`). Azure DevOps only issues these tokens to a stage that references the service connection in a task, which is why the Terraform steps run inside `AzureCLI@2`.
 - Azure AI Search free tier: one per subscription. If one already exists, change `sku` to `basic` (paid) or remove the other one.

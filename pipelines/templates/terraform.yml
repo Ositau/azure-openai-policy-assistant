@@ -1,7 +1,9 @@
 # Runs a script against the main Terraform layer with remote state.
 # Authentication: workload identity federation through the Azure DevOps service
-# connection. The provider requests fresh OIDC tokens itself, so long applies
-# don't fail when a short-lived token expires. No client secret exists anywhere.
+# connection. Azure DevOps only issues OIDC tokens for a service connection that
+# a task in the same stage references, so this runs as an AzureCLI@2 task. The
+# provider requests fresh OIDC tokens itself, so long applies don't fail when a
+# short-lived token expires. No client secret exists anywhere.
 parameters:
   - name: displayName
     type: string
@@ -9,14 +11,19 @@ parameters:
     type: string
 
 steps:
-  - script: |
-      set -euo pipefail
-      terraform -chdir=infra init -input=false \
-        -backend-config="resource_group_name=$(tfStateRg)" \
-        -backend-config="storage_account_name=$(tfStateAccount)" \
-        -backend-config="container_name=$(tfStateContainer)"
-      ${{ parameters.script }}
+  - task: AzureCLI@2
     displayName: ${{ parameters.displayName }}
+    inputs:
+      azureSubscription: $(serviceConnectionName)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        terraform -chdir=infra init -input=false \
+          -backend-config="resource_group_name=$(tfStateRg)" \
+          -backend-config="storage_account_name=$(tfStateAccount)" \
+          -backend-config="container_name=$(tfStateContainer)"
+        ${{ parameters.script }}
     env:
       ARM_USE_OIDC: "true"
       ARM_OIDC_REQUEST_TOKEN: $(System.AccessToken)
