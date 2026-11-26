@@ -16,14 +16,14 @@ The pipeline identity has **no Microsoft Graph permissions and no secret**. It i
 
 ## One-time setup
 
-1. **Azure DevOps project** (public): connect the GitHub repo (Project settings → GitHub connections). Under the pipeline settings, keep "Build pull requests from forks" off.
+1. **Azure DevOps project** (private; the code itself is public on GitHub): pipelines read the GitHub repo through a GitHub connection, created when you add the first pipeline. Keep "Build pull requests from forks" off.
 
-2. **Service connection, step 1**: Project settings → Service connections → New → Azure Resource Manager → **Workload identity federation (manual)**. Name it `sc-policy-assistant`. Copy the **Issuer** and **Subject identifier** it shows. Leave the draft open.
+2. **Service connection, step 1**: Project settings → Service connections → New → Azure Resource Manager → Identity type **App registration or managed identity (manual)**, Credential **Workload identity federation**. Name it `sc-policy-assistant`. Enter your tenant ID and click Next: the draft is saved and shows the **Issuer** and **Subject identifier**. Put them in `infra/bootstrap/terraform.tfvars` (git-ignored) as `ado_wif_issuer` and `ado_wif_subject`.
 
 3. **Bootstrap** (your machine, `az login` as an admin):
    ```bash
    terraform -chdir=infra/bootstrap init
-   terraform -chdir=infra/bootstrap apply -var 'ado_wif_issuer=<issuer>' -var 'ado_wif_subject=<subject>'
+   terraform -chdir=infra/bootstrap apply
    ```
 
 4. **Service connection, step 2**: fill in the values from `terraform -chdir=infra/bootstrap output service_connection` (subscription, tenant, client ID), scope level Subscription, then **Verify and save**. Note the connection's ID (in its URL, `resourceId=`).
@@ -38,8 +38,7 @@ The pipeline identity has **no Microsoft Graph permissions and no secret**. It i
 
 9. **Sign-in redirect** (once): the sign-in app needs the Container Apps domain, which only exists after step 8.
    ```bash
-   terraform -chdir=infra/bootstrap apply -var 'ado_wif_issuer=<issuer>' -var 'ado_wif_subject=<subject>' \
-     -var "redirect_domain=<easy_auth_redirect_domain from the infra pipeline log>"
+   terraform -chdir=infra/bootstrap apply -var "redirect_domain=<sign-in redirect domain from the infra pipeline log>"
    ```
 
 10. **First app run**: run the app pipeline. It indexes the policies, runs the evaluation set (fails the release on any wrong answer or HR leak) and rolls out the image. Open the app URL from the Release stage log.
@@ -56,7 +55,7 @@ Sign out and back in to the app to pick up the new group.
 Destroy the main layer first (it lives in the bootstrap resource group), then the bootstrap:
 ```bash
 az group delete -n rg-policy-assistant-demo --yes        # removes app resources, Key Vault, registry
-terraform -chdir=infra/bootstrap destroy -var 'ado_wif_issuer=<issuer>' -var 'ado_wif_subject=<subject>'
+terraform -chdir=infra/bootstrap destroy
 ```
 Delete the service connection, variable group and environments in Azure DevOps afterwards.
 

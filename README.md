@@ -34,7 +34,7 @@ The company ("Kestrel Bridge Finance") and its policies are fictional, written f
 
 ## Azure DevOps pipelines
 
-**Infrastructure** (`pipelines/infra.yml`): Validate (fmt, validate, TFLint) → Plan → manual approval → Apply. The approved list of changes is saved, and Apply re-plans and stops if anything differs, so what runs is what was approved (plan files aren't published because the project is public).
+**Infrastructure** (`pipelines/infra.yml`): Validate (fmt, validate, TFLint) → Plan → manual approval → Apply. The plan file is saved as a pipeline artifact and the Apply stage applies exactly that file, so what runs is what was approved.
 
 **Application** (`pipelines/app.yml`): unit tests → image built in ACR → re-index and run the evaluation set (quality gate) → roll out to Container Apps.
 

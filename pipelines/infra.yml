@@ -1,9 +1,9 @@
 # Infrastructure pipeline: Validate -> Plan -> (manual approval) -> Apply.
 #
-# The plan is shown in the Plan stage log for review. A plan file can't be shared
-# as an artifact in a public project (it would expose keys held in state), so the
-# Apply stage re-plans and refuses to continue unless the list of resource changes
-# is identical to the one that was approved.
+# The Plan stage saves the plan file as a pipeline artifact (private project).
+# After approval, the Apply stage applies exactly that saved plan, so what runs
+# is what was reviewed. If the state changed in between, Terraform rejects the
+# stale plan and the run fails safely.
 
 trigger:
   branches:
@@ -12,7 +12,7 @@ trigger:
     include: [infra/*, pipelines/infra.yml, pipelines/templates/*]
     exclude: [infra/bootstrap/*]
 
-pr: none # public project: never run with the service connection for fork PRs
+pr: none
 
 variables:
   - group: policy-assistant
@@ -78,17 +78,19 @@ stages:
                 set -e
                 if [ $code -eq 1 ]; then exit 1; fi
                 echo "##vso[task.setvariable variable=hasChanges]$([ $code -eq 2 ] && echo true || echo false)"
+                mkdir -p "$(Build.ArtifactStagingDirectory)/plan"
+                cp infra/tfplan infra/.terraform.lock.hcl "$(Build.ArtifactStagingDirectory)/plan/"
+                echo "Changes to approve:"
                 terraform -chdir=infra show -json tfplan \
-                  | jq -c '[.resource_changes[] | select(.change.actions != ["no-op"]) | {address, actions: .change.actions}] | sort_by(.address)' \
-                  > "$(Build.ArtifactStagingDirectory)/plan-summary.json"
-                echo "Changes to approve:"; jq -r '.[] | "\(.actions | join("/"))  \(.address)"' "$(Build.ArtifactStagingDirectory)/plan-summary.json"
+                  | jq -r '.resource_changes[] | select(.change.actions != ["no-op"]) | "\(.change.actions | join("/"))  \(.address)"'
+
           - script: echo "##vso[task.setvariable variable=hasChanges;isOutput=true]$(hasChanges)"
             name: result
             displayName: Publish plan result
 
-          - publish: $(Build.ArtifactStagingDirectory)/plan-summary.json
-            artifact: plan-summary
-            displayName: Publish plan summary (no values)
+          - publish: $(Build.ArtifactStagingDirectory)/plan
+            artifact: tfplan
+            displayName: Publish plan file
 
   - stage: Apply
     dependsOn: Plan
@@ -103,19 +105,13 @@ stages:
               steps:
                 - checkout: self
                 - download: current
-                  artifact: plan-summary
+                  artifact: tfplan
                 - template: templates/install-tools.yml
                 - template: templates/terraform.yml
                   parameters:
-                    displayName: Re-plan, compare with approved plan, apply
+                    displayName: Apply the approved plan
                     script: |
-                      terraform -chdir=infra plan -input=false -out=tfplan
-                      terraform -chdir=infra show -json tfplan \
-                        | jq -c '[.resource_changes[] | select(.change.actions != ["no-op"]) | {address, actions: .change.actions}] | sort_by(.address)' \
-                        > /tmp/now.json
-                      if ! diff <(jq . "$(Pipeline.Workspace)/plan-summary/plan-summary.json") <(jq . /tmp/now.json); then
-                        echo "##vso[task.logissue type=error]Planned changes differ from the approved plan. Re-run the pipeline."
-                        exit 1
-                      fi
+                      cp "$(Pipeline.Workspace)/tfplan/tfplan" infra/tfplan
                       terraform -chdir=infra apply -input=false tfplan
                       echo "App URL: $(terraform -chdir=infra output -raw app_url)"
+                      echo "Sign-in redirect domain: $(terraform -chdir=infra output -raw easy_auth_redirect_domain)"
