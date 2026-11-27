@@ -75,3 +75,30 @@ def test_search_is_filtered_by_the_users_groups(monkeypatch):
 def test_question_length_is_limited():
     response = client.post("/api/ask", json={"question": "x" * 501}, headers=principal("staff-guid"))
     assert response.status_code == 422
+
+
+def proxy_headers(*groups: str) -> dict:
+    return {"X-Forwarded-Email": "user@example.com", "X-Forwarded-Groups": ",".join(groups)}
+
+
+def test_proxy_headers_are_ignored_unless_the_deployment_trusts_the_proxy(monkeypatch):
+    # On Container Apps (or anywhere without oauth2-proxy in front), forged headers must not sign anyone in.
+    monkeypatch.delenv("SIGN_IN_PROXY", raising=False)
+    assert client.get("/api/me", headers=proxy_headers("hr-guid")).status_code == 401
+
+
+def test_groups_are_read_from_oauth2_proxy_headers_on_aks(monkeypatch):
+    monkeypatch.setenv("SIGN_IN_PROXY", "oauth2-proxy")
+    body = client.get("/api/me", headers=proxy_headers("staff-guid", "some-other-group")).json()
+    assert body == {"name": "user@example.com", "groups": ["Staff"]}
+
+
+def test_easy_auth_still_wins_when_both_are_present(monkeypatch):
+    monkeypatch.setenv("SIGN_IN_PROXY", "oauth2-proxy")
+    headers = {**principal("staff-guid"), **proxy_headers("hr-guid")}
+    assert client.get("/api/me", headers=headers).json()["groups"] == ["Staff"]
+
+
+def test_healthz_reports_the_running_version(monkeypatch):
+    monkeypatch.setenv("APP_VERSION", "abc1234")
+    assert client.get("/healthz").json() == {"status": "ok", "version": "abc1234"}
