@@ -1,8 +1,11 @@
 """Policy Assistant web app (FastAPI).
 
-Sign-in is handled in front of the app by Azure Container Apps built-in
-authentication (Entra ID). The platform passes the signed-in user's claims,
-including group IDs, in the X-MS-CLIENT-PRINCIPAL header.
+Sign-in is handled in front of the app, never by the app itself:
+- On Azure Container Apps, built-in authentication (Entra ID) passes the user's claims,
+  including group IDs, in the X-MS-CLIENT-PRINCIPAL header.
+- On AKS, oauth2-proxy runs next to the app in the same pod and passes the user and groups in
+  X-Forwarded-* headers. Those headers are only trusted when SIGN_IN_PROXY=oauth2-proxy, which
+  is set only in the AKS deployment, where the app listens on localhost behind the proxy.
 """
 
 from __future__ import annotations
@@ -50,6 +53,14 @@ def current_user(request: Request) -> tuple[str, list[str]]:
         name = request.headers.get("X-MS-CLIENT-PRINCIPAL-NAME", "unknown")
         return name, groups
 
+    # AKS: oauth2-proxy in the same pod. Never trusted unless this deployment says so, because
+    # anyone can send these headers to an app that isn't behind the proxy.
+    if os.getenv("SIGN_IN_PROXY") == "oauth2-proxy":
+        user = request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
+        if user:
+            groups = [g.strip() for g in request.headers.get("X-Forwarded-Groups", "").split(",") if g.strip()]
+            return user, groups
+
     # Local development only: DEV_GROUPS=staff or DEV_GROUPS=staff,hr.
     # Never set in Azure, so a request without the platform header is rejected there.
     dev = os.getenv("DEV_GROUPS")
@@ -67,7 +78,8 @@ def index() -> FileResponse:
 
 @app.get("/healthz")
 def healthz() -> dict:
-    return {"status": "ok"}
+    # APP_VERSION is set by the deployment (the image tag), so you can see which build is running.
+    return {"status": "ok", "version": os.getenv("APP_VERSION", "unknown")}
 
 
 @app.get("/api/selftest")
